@@ -1,0 +1,1441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<title>Panorama Painter</title>
+<style>
+  :root {
+    font-family: system-ui, sans-serif;
+    color: #222;
+    background: #f5f5f5;
+    accent-color: #333;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  button, input { font: inherit; }
+  button { color: inherit; cursor: pointer; }
+
+  canvas#gl, canvas#overlay { position: fixed; inset: 0; display: block; }
+  canvas#gl { z-index: 1; cursor: grab; touch-action: none; }
+  canvas#gl.grabbing { cursor: grabbing; }
+  canvas#gl.locked { cursor: crosshair; }
+  canvas#overlay { z-index: 5; pointer-events: none; }
+
+  #lockFrame {
+    position: fixed; inset: 0; z-index: 12;
+    border: 2px solid rgba(90, 170, 220, .7);
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  #lockFrame.on { opacity: 1; }
+
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; z-index: 20;
+    display: flex; width: 100px; flex-direction: column; gap: 9px;
+    padding: 10px 8px; overflow-y: auto;
+    background: #fff; border-right: 1px solid #ddd;
+    color: #333; font-size: 12px;
+    transition: transform .3s, opacity .3s;
+  }
+  .sidebar.hidden { transform: translateX(-100%); opacity: 0; pointer-events: none; }
+  .sidebar h1 { margin: 0; font-size: 15px; font-weight: 600; text-align: center; }
+  .field { display: block; }
+  .field-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 4px; color: #666;
+  }
+  .val { color: #888; font-size: 11px; font-variant-numeric: tabular-nums; }
+  input[type=color] {
+    width: 100%; height: 28px; padding: 2px;
+    border: 1px solid #ccc; background: #fff; cursor: pointer;
+  }
+  input[type=range] { width: 100%; margin: 0; cursor: pointer; }
+  hr { width: 100%; margin: 1px 0; border: 0; border-top: 1px solid #e5e5e5; }
+  .tool-grid { display: grid; gap: 4px; }
+  .tool-grid.c2 { grid-template-columns: repeat(2, 1fr); }
+  .tool-grid.c3 { grid-template-columns: repeat(3, 1fr); }
+  .sidebar button {
+    display: flex; height: 32px; align-items: center; justify-content: center;
+    padding: 0; background: #fff; border: 1px solid #ccc;
+  }
+  .sidebar button svg { display: block; width: 18px; height: 18px; }
+  .sidebar button:hover:not(:disabled) { background: #f2f2f2; }
+  .sidebar button.active { color: #fff; background: #333; border-color: #333; }
+  .sidebar button:disabled { opacity: .4; cursor: not-allowed; }
+
+  #bottom-bar {
+    position: fixed; bottom: 20px; left: 20px; z-index: 50;
+    display: flex; gap: 8px; transition: opacity .3s;
+  }
+  #bottom-bar.hidden { opacity: 0; pointer-events: none; }
+  #bottom-bar button {
+    padding: 6px 9px; border: 1px solid rgba(0, 0, 0, .15);
+    background: rgba(255, 255, 255, .8); font-size: 16px;
+  }
+  #bottom-bar button:hover:not(:disabled) { background: #fff; }
+  #bottom-bar button:disabled { opacity: .4; cursor: not-allowed; }
+  #bottom-bar button.locked { color: #fff; background: #397da5; }
+  #hint {
+    position: fixed; top: 14px; left: 50%; z-index: 14;
+    transform: translateX(-50%); font-size: 12px; white-space: nowrap;
+    pointer-events: none; transition: opacity .3s;
+  }
+  #hint.hide { opacity: 0; }
+  #exportToast {
+    position: fixed; bottom: 80px; left: 50%; z-index: 260;
+    padding: 9px 16px; transform: translateX(-50%) translateY(8px);
+    color: #fff; background: #333; font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+  }
+  #exportToast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ---------- 首次新建画布后的简短教程 ---------- */
+  #tutorial {
+    position: fixed; left: 50%; bottom: 88px; z-index: 300;
+    transform: translateX(-50%) translateY(12px);
+    opacity: 0; pointer-events: none;
+    visibility: hidden;
+    transition: opacity .3s ease, transform .3s ease, visibility 0s linear .3s;
+  }
+  #tutorial.on {
+    opacity: 1; transform: translateX(-50%) translateY(0);
+    visibility: visible;
+    transition: opacity .3s ease, transform .3s ease, visibility 0s linear 0s;
+  }
+  .tutorial-card {
+    width: 290px; max-width: calc(100vw - 48px);
+    padding: 15px 18px 14px;
+    background: rgba(255, 255, 255, .96);
+    border: 1px solid #ddd;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .18);
+    pointer-events: auto;
+  }
+  .tutorial-card h3 {
+    margin: 0 0 9px; font-size: 14px; font-weight: 600;
+  }
+  .tutorial-card ol {
+    margin: 0 0 12px; padding-left: 17px;
+    font-size: 12.5px; line-height: 1.85; color: #444;
+  }
+  .tutorial-card li::marker { color: #999; }
+  .tutorial-card button {
+    width: 100%; padding: 8px 0;
+    color: #fff; background: #333; border: 1px solid #333;
+    font-size: 13px;
+  }
+  .tutorial-card button:hover { background: #555; }
+
+  #startScreen {
+    position: fixed; inset: 0; z-index: 200;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 26px; background: #4e4e4e; transition: opacity .5s ease;
+  }
+  #startScreen.hidden { opacity: 0; pointer-events: none; }
+  #startScreen h1 {
+    font-weight: normal; color: #fff;
+    font-size: clamp(24px, 6vw, 40px);
+    text-shadow: 0 3px 6px #000;
+    letter-spacing: .06em; text-align: center;
+  }
+  #createBtn {
+    padding: 25px; color: #000; background: #aaa;
+    border: 0; outline: 0; font-size: 23px;
+    box-shadow: 0 7px 7px #0005;
+  }
+
+  #startMeta {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    margin-top: -10px;
+  }
+  #startCredit {
+    color: rgba(255, 255, 255, .85);
+    font-size: 13px; letter-spacing: .14em;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 2px 5px #0007;
+  }
+  #startHint {
+    color: rgba(255, 255, 255, .55);
+    font-size: 12.5px; letter-spacing: .05em;
+    text-align: center; line-height: 1.7;
+    text-shadow: 0 2px 5px #0007;
+  }
+
+  #createPanel {
+    position: fixed; inset: 0; z-index: 210;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, .35);
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  #createPanel.on { opacity: 1; pointer-events: auto; }
+  .create-card {
+    width: 400px; max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 40px); overflow-y: auto;
+    padding: 22px; color: #222; background: #fff; border: 1px solid #ddd;
+  }
+  .create-card h2 {
+    margin: 0 0 20px; font-size: 17px; font-weight: 600; text-align: center;
+  }
+  .section { margin-bottom: 18px; }
+  .section > label { display: block; margin-bottom: 8px; color: #555; font-size: 12px; }
+  .res-options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .res-options button {
+    padding: 9px 0; color: #333; background: #f5f5f5;
+    border: 1px solid #ddd; font-size: 13px; font-variant-numeric: tabular-nums;
+  }
+  .res-options button:hover { background: #eaeaea; }
+  .res-options button.active { color: #fff; background: #333; border-color: #333; }
+  .res-info {
+    margin-top: 8px; color: #777; font-size: 11px; text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .bg-row { display: flex; align-items: center; gap: 10px; }
+  .bg-row input[type=color] { width: 56px; height: 36px; flex-shrink: 0; }
+  .bg-presets { display: flex; flex: 1; gap: 6px; }
+  .bg-presets button {
+    flex: 1; height: 30px; padding: 0;
+    border: 1px solid #ccc;
+  }
+  .bg-presets button:hover { border-color: #555; }
+  .create-actions { display: flex; gap: 8px; margin-top: 20px; }
+  .create-actions button {
+    flex: 1; padding: 11px 0; border: 1px solid #ccc;
+    font-size: 14px; transition: background .15s;
+  }
+  #cancelCreate { color: #333; background: #f5f5f5; }
+  #cancelCreate:hover { background: #eaeaea; }
+  #confirmCreate { color: #fff; background: #333; border-color: #333; }
+  #confirmCreate:hover { background: #555; }
+</style>
+</head>
+<body>
+
+<canvas id="overlay"></canvas>
+<div id="lockFrame"></div>
+
+<!-- ================= 侧边面板 ================= -->
+<aside class="sidebar hidden">
+  <h1>Panorama Painter</h1>
+
+  <label class="field">
+    <div class="field-head"><span>颜色</span></div>
+    <input type="color" id="color" value="#ff4d3d">
+  </label>
+
+  <label class="field">
+    <div class="field-head"><span>粗细</span><span class="val" id="sizeVal">10</span></div>
+    <input type="range" id="size" min="1" max="80" value="10">
+  </label>
+
+  <label class="field">
+    <div class="field-head"><span>透明度</span><span class="val" id="alphaVal">1.00</span></div>
+    <input type="range" id="alpha" min="0.05" max="1" step="0.01" value="1">
+  </label>
+
+  <label class="field">
+    <div class="field-head"><span>稳定器</span><span class="val" id="stabVal">40</span></div>
+    <input type="range" id="stab" min="0" max="100" value="40">
+  </label>
+
+  <hr>
+
+  <div class="tool-grid c2">
+    <button id="btnPen" class="active" title="画笔">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M11.5 2.5l2 2-7.5 7.5-3 1 1-3z"/>
+        <path d="M10 4l2 2"/>
+      </svg>
+    </button>
+    <button id="btnWillow" title="柳叶笔（圈选填充）">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 8.5C3 5 5.5 2.5 9 2.5s6 2.5 6 6-3 5-6 5-4.5-1-6-2.5z"/>
+        <path d="M6 6.5c1 1.5 3 1.5 4 0"/>
+      </svg>
+    </button>
+  </div>
+
+  <hr>
+
+  <div class="tool-grid c2">
+    <button id="btnUndo" disabled title="撤回 (Ctrl+Z)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 4 3 7l3 3"/>
+        <path d="M3 7h6.5a3.5 3.5 0 0 1 0 7H6"/>
+      </svg>
+    </button>
+    <button id="btnRedo" disabled title="复原 (Ctrl+Y)">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10 4l3 3-3 3"/>
+        <path d="M13 7H6.5a3.5 3.5 0 0 0 0 7H10"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="tool-grid c3">
+    <button id="btnGrid" class="active" title="显示 / 隐藏经纬网格">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="2" width="12" height="12"/>
+        <path d="M6 2v12M10 2v12M2 6h12M2 10h12"/>
+      </svg>
+    </button>
+    <button id="btnClear" title="清空全部笔迹">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 4.5h11"/>
+        <path d="M6 4.5V3h4v1.5"/>
+        <path d="M4.5 4.5l.8 8.5h5.4l.8-8.5"/>
+      </svg>
+    </button>
+    <button id="btnSave" title="导出等距柱状全景图">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M8 2v7.5"/>
+        <path d="M5 6.8 8 9.8l3-3"/>
+        <path d="M2.8 12.8h10.4"/>
+      </svg>
+    </button>
+  </div>
+</aside>
+
+<!-- ================= 左下角按钮 ================= -->
+<div id="bottom-bar" class="hidden">
+  <button id="projBtn" title="切换投影方式">透视投影</button>
+  <button id="lockBtn" title="固定视角后即可绘画">固定视角</button>
+</div>
+
+<div id="hint" class="hide">固定视角后即可绘画</div>
+<div id="exportToast">正在导出全景图…</div>
+
+<!-- ================= 首次新建后的简短教程 ================= -->
+<div id="tutorial">
+  <div class="tutorial-card">
+    <h3>快速上手</h3>
+    <ol>
+      <li>拖动旋转视角，滚轮缩放</li>
+      <li>手机可以用双指放大</li>
+      <li>点「固定视角」后即可绘画</li>
+      <li>点「切换投影」可以换一个视角</li>
+      <li>画完点保存，导出全景图</li>
+    </ol>
+    <button id="tutorialOk">知道啦！</button>
+  </div>
+</div>
+
+<!-- ================= 开始界面（Panorama to 3D 样式） ================= -->
+<div id="startScreen">
+  <h1>Panorama Painter</h1>
+  <button id="createBtn">创建画布</button>
+  <div id="startMeta">
+    <div id="startCredit">GKll44 | 2026</div>
+  </div>
+</div>
+
+<!-- ================= 创建面板 ================= -->
+<div id="createPanel">
+  <div class="create-card">
+    <h2>新建全景画布</h2>
+
+    <div class="section">
+      <label>分辨率</label>
+      <div class="res-options">
+        <button data-w="1024" data-h="512">512p</button>
+        <button data-w="2048" data-h="1024" class="active">1024p</button>
+        <button data-w="4096" data-h="2048">2048p</button>
+        <button data-w="8192" data-h="4096">4096p</button>
+      </div>
+      <div class="res-info" id="resInfo">2048 × 1024  (2:1)</div>
+    </div>
+
+    <div class="section">
+      <label>背景颜色</label>
+      <div class="bg-row">
+        <input type="color" id="bgColor" value="#ffffff">
+        <div class="bg-presets">
+          <button data-color="#ffffff" style="background:#ffffff" title="白"></button>
+          <button data-color="#f2f2f2" style="background:#f2f2f2" title="浅灰"></button>
+          <button data-color="#9a9a9a" style="background:#9a9a9a" title="中灰"></button>
+          <button data-color="#1a1c24" style="background:#1a1c24" title="深色"></button>
+          <button data-color="#0b1a2b" style="background:#0b1a2b" title="深蓝"></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="create-actions">
+      <button id="cancelCreate">取消</button>
+      <button id="confirmCreate">创建</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.126.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* =========================================================
+   1. 渲染器 / 相机基础
+   ========================================================= */
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.domElement.id = 'gl';
+document.body.appendChild(renderer.domElement);
+
+const glEl = renderer.domElement;
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 0);
+camera.rotation.order = 'YXZ';
+
+const fsScene = new THREE.Scene();
+const fsCam   = new THREE.Camera();
+const fsQuad  = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), null);
+fsQuad.frustumCulled = false;
+fsScene.add(fsQuad);
+
+/* =========================================================
+   2. 相机状态
+   ========================================================= */
+let yaw = 0, pitch = 0;
+let fov = 75, targetFov = 75;
+
+let isFisheye   = false;
+let currentMode = 0, targetMode = 0;
+
+let velYaw = 0, velPitch = 0;
+let lastRotateInputTime = 0;
+
+const PERSP_FOV_MIN = 16,  PERSP_FOV_MAX = 120;
+const FISHEYE_FOV_MIN = 30, FISHEYE_FOV_MAX = 189;
+const BASE_FOV = 75;
+const BASE_SENSITIVITY = 0.0032;
+const INERTIA_DAMPING = 0.93;
+const MIN_VELOCITY = 0.00005;
+const ZOOM_SMOOTH = 0.18;
+const MODE_SMOOTH = 0.12;
+const PITCH_LIMIT = Math.PI / 2 - 0.01;
+
+const clampPitch = p => Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p));
+
+function updateCamera() {
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+  camera.updateMatrixWorld();
+}
+updateCamera();
+
+/* =========================================================
+   3. 主着色器
+   ========================================================= */
+const uniforms = {
+  tEnv:         { value: null },
+  uCamMat:      { value: new THREE.Matrix4() },
+  uAspect:      { value: window.innerWidth / window.innerHeight },
+  uFov:         { value: THREE.MathUtils.degToRad(fov) },
+  uMode:        { value: 0.0 },
+  uShowGrid:    { value: 1.0 },
+  uPixelAngle:  { value: 0.05 }
+};
+
+const VERT_FS = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`;
+
+const FRAG_MAIN = `
+  uniform sampler2D tEnv;
+  uniform mat4  uCamMat;
+  uniform float uAspect;
+  uniform float uFov;
+  uniform float uMode;
+  uniform float uShowGrid;
+  uniform float uPixelAngle;
+  varying vec2 vUv;
+
+  const float PI = 3.14159265359;
+
+  void main() {
+    vec2 ndc = vUv * 2.0 - 1.0;
+
+    float perspFov = min(uFov, 2.967);
+    float t = tan(perspFov * 0.5);
+    vec3 dirPersp = normalize(vec3(ndc.x * uAspect * t, ndc.y * t, -1.0));
+
+    vec2 p = ndc;
+    p.x *= uAspect;
+    float r = length(p);
+    float maxR = sqrt(uAspect * uAspect + 1.0);
+    float rNorm = r / maxR;
+
+    float thetaMax = uFov * 0.5;
+    float theta = 2.0 * atan(rNorm * tan(thetaMax * 0.5));
+    float phi = atan(p.y, p.x);
+    vec3 dirFisheye = vec3(
+      sin(theta) * cos(phi),
+      sin(theta) * sin(phi),
+      -cos(theta)
+    );
+
+    vec3 dirCam   = normalize(mix(dirPersp, dirFisheye, uMode));
+    vec3 worldDir = normalize((uCamMat * vec4(dirCam, 0.0)).xyz);
+
+    float vSphere = acos(clamp(-worldDir.y, -1.0, 1.0)) / PI;
+    float uGeom   = atan(worldDir.z, -worldDir.x) / (2.0 * PI) + 0.5;
+    float uSphere = 1.0 - uGeom;
+
+    vec3 col = texture2D(tEnv, vec2(uSphere, vSphere)).rgb;
+
+    if (uShowGrid > 0.001) {
+      float lat = (0.5 - vSphere) * 180.0;
+      float lon = uSphere * 360.0;
+
+      float w = max(uPixelAngle * 1.15, 0.012);
+
+      float f = 15.0;
+      float dlF = abs(mod(lon + f * 0.5, f) - f * 0.5);
+      float dbF = abs(mod(lat + f * 0.5, f) - f * 0.5);
+
+      float c = 45.0;
+      float dlC = abs(mod(lon + c * 0.5, c) - c * 0.5);
+      float dbC = abs(mod(lat + c * 0.5, c) - c * 0.5);
+
+      float polarFade = smoothstep(0.0, 6.0, 90.0 - abs(lat));
+
+      float gF = max((1.0 - smoothstep(0.0, w,       dlF)) * polarFade,
+                     (1.0 - smoothstep(0.0, w,       dbF))) * 0.35;
+      float gC = max((1.0 - smoothstep(0.0, w * 2.4, dlC)) * polarFade,
+                     (1.0 - smoothstep(0.0, w * 2.4, dbC))) * 0.75;
+
+      float g = max(gF, gC);
+
+      float eq = 1.0 - smoothstep(0.0, w * 2.6, abs(lat));
+      float pm = 1.0 - smoothstep(0.0, w * 2.6, min(abs(lon), abs(lon - 360.0)));
+      g = max(g, eq * 0.85);
+      g = max(g, pm * 0.55 * polarFade);
+
+      vec3 gridCol = vec3(0.10, 0.55, 0.85);
+      col = mix(col, gridCol, clamp(g, 0.0, 0.85) * uShowGrid);
+    }
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const mainMat = new THREE.ShaderMaterial({
+  uniforms,
+  vertexShader: VERT_FS,
+  fragmentShader: FRAG_MAIN,
+  depthTest: false,
+  depthWrite: false
+});
+
+const mainQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mainMat);
+mainQuad.frustumCulled = false;
+scene.add(mainQuad);
+
+/* =========================================================
+   4. 烘焙着色器
+   ========================================================= */
+const bakeUniforms = {
+  tBase:    { value: null },
+  tOverlay: { value: null },
+  uCamInv:  { value: new THREE.Matrix4() },
+  uAspect:  { value: 1 },
+  uFov:     { value: 1 },
+  uMode:    { value: 0 }
+};
+
+const FRAG_BAKE = `
+  uniform sampler2D tBase;
+  uniform sampler2D tOverlay;
+  uniform mat4  uCamInv;
+  uniform float uAspect;
+  uniform float uFov;
+  uniform float uMode;
+  varying vec2 vUv;
+
+  const float PI = 3.14159265359;
+
+  void main() {
+    vec2 uv = vUv;
+
+    float vSphere = uv.y;
+    float y  = -cos(vSphere * PI);
+    float a  = (1.0 - 2.0 * uv.x) * PI;
+    float rr = sqrt(max(0.0, 1.0 - y * y));
+    vec3 worldDir = vec3(-rr * cos(a), y, rr * sin(a));
+
+    vec3 d = normalize((uCamInv * vec4(worldDir, 0.0)).xyz);
+
+    bool visible = false;
+    vec2 ndc = vec2(0.0);
+
+    if (uMode > 0.5) {
+      float thetaMax = uFov * 0.5;
+      float theta = acos(clamp(-d.z, -1.0, 1.0));
+      if (theta <= thetaMax) {
+        float k  = tan(theta * 0.5) / max(tan(thetaMax * 0.5), 1e-5);
+        float mR = sqrt(uAspect * uAspect + 1.0);
+        float rn = k * mR;
+        float ph = atan(d.y, d.x);
+        ndc = vec2(rn * cos(ph) / uAspect, rn * sin(ph));
+        visible = true;
+      }
+    } else {
+      if (d.z < -1e-4) {
+        float t = tan(min(uFov, 2.967) * 0.5);
+        ndc = vec2((d.x / (-d.z)) / (uAspect * t), (d.y / (-d.z)) / t);
+        visible = true;
+      }
+    }
+
+    vec3 col = texture2D(tBase, uv).rgb;
+
+    if (visible) {
+      vec2 suv = ndc * 0.5 + 0.5;
+      if (suv.x >= 0.0 && suv.x <= 1.0 && suv.y >= 0.0 && suv.y <= 1.0) {
+        vec4 ov = texture2D(tOverlay, suv);
+        col = mix(col, ov.rgb, ov.a);
+      }
+    }
+
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+const bakeMat = new THREE.ShaderMaterial({
+  uniforms: bakeUniforms,
+  vertexShader: VERT_FS,
+  fragmentShader: FRAG_BAKE,
+  depthTest: false,
+  depthWrite: false
+});
+
+const copyUniforms = { tSrc: { value: null } };
+const copyMat = new THREE.ShaderMaterial({
+  uniforms: copyUniforms,
+  vertexShader: VERT_FS,
+  fragmentShader: `
+    uniform sampler2D tSrc;
+    varying vec2 vUv;
+    void main() { gl_FragColor = texture2D(tSrc, vUv); }
+  `,
+  depthTest: false,
+  depthWrite: false
+});
+
+/* 可配置背景色的填充材质 */
+const fillUniforms = { uColor: { value: new THREE.Color(1, 1, 1) } };
+const fillMat = new THREE.ShaderMaterial({
+  uniforms: fillUniforms,
+  vertexShader: VERT_FS,
+  fragmentShader: `
+    uniform vec3 uColor;
+    varying vec2 vUv;
+    void main() { gl_FragColor = vec4(uColor, 1.0); }
+  `,
+  depthTest: false,
+  depthWrite: false
+});
+
+/* =========================================================
+   5. 全景渲染目标
+   ========================================================= */
+const BUDGET_BYTES = 320 * 1024 * 1024;
+
+let panW = 0, panH = 0;
+let maxHist = 12;
+
+let rtMain = null;
+let rtAlt  = null;
+const rtPool = [];
+
+function createRT(w, h) {
+  return new THREE.WebGLRenderTarget(w, h, {
+    minFilter: THREE.LinearFilter,
+    magFilter: THREE.LinearFilter,
+    format: THREE.RGBAFormat,
+    type: THREE.UnsignedByteType,
+    depthBuffer: false,
+    stencilBuffer: false,
+    generateMipmaps: false,
+    wrapS: THREE.ClampToEdgeWrapping,
+    wrapT: THREE.ClampToEdgeWrapping
+  });
+}
+
+function acquireRT(w, h) {
+  for (let i = rtPool.length - 1; i >= 0; i--) {
+    const rt = rtPool[i];
+    if (rt.width === w && rt.height === h) {
+      rtPool.splice(i, 1);
+      return rt;
+    }
+  }
+  return createRT(w, h);
+}
+
+function releaseRT(rt) {
+  if (!rt) return;
+  if (rtPool.length < 4) rtPool.push(rt);
+  else rt.dispose();
+}
+
+function blitToRT(srcTexture, dstRT) {
+  copyUniforms.tSrc.value = srcTexture;
+  fsQuad.material = copyMat;
+  const prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(dstRT);
+  renderer.render(fsScene, fsCam);
+  renderer.setRenderTarget(prev);
+}
+
+function fillRT(rt) {
+  fsQuad.material = fillMat;
+  const prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(rt);
+  renderer.render(fsScene, fsCam);
+  renderer.setRenderTarget(prev);
+}
+
+/* =========================================================
+   6. Overlay 画布
+   ========================================================= */
+const overlay = document.getElementById('overlay');
+const octx    = overlay.getContext('2d');
+octx.lineCap  = 'round';
+octx.lineJoin = 'round';
+
+const overlayTex = new THREE.CanvasTexture(overlay);
+overlayTex.minFilter = THREE.LinearFilter;
+overlayTex.magFilter = THREE.LinearFilter;
+overlayTex.generateMipmaps = false;
+overlayTex.wrapS = THREE.ClampToEdgeWrapping;
+overlayTex.wrapT = THREE.ClampToEdgeWrapping;
+
+function resizeOverlay() {
+  overlay.width  = window.innerWidth;
+  overlay.height = window.innerHeight;
+  octx.lineCap = 'round';
+  octx.lineJoin = 'round';
+  overlayTex.needsUpdate = true;
+}
+resizeOverlay();
+
+/* 占位纹理 */
+const dummyTex = new THREE.DataTexture(
+  new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat
+);
+dummyTex.needsUpdate = true;
+uniforms.tEnv.value = dummyTex;
+
+/* =========================================================
+   7. 历史
+   ========================================================= */
+const undoStack = [];
+const redoStack = [];
+
+function pushUndo() {
+  if (!rtMain) return;
+  const snap = acquireRT(panW, panH);
+  blitToRT(rtMain.texture, snap);
+
+  undoStack.push(snap);
+  while (undoStack.length > maxHist) releaseRT(undoStack.shift());
+  while (redoStack.length) releaseRT(redoStack.pop());
+
+  updateHistoryButtons();
+}
+
+function undo() {
+  if (undoStack.length === 0 || !rtMain) return;
+  const prev = undoStack.pop();
+  redoStack.push(rtMain);
+  rtMain = prev;
+  updateHistoryButtons();
+}
+
+function redo() {
+  if (redoStack.length === 0 || !rtMain) return;
+  const next = redoStack.pop();
+  undoStack.push(rtMain);
+  rtMain = next;
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  btnUndo.disabled = undoStack.length === 0;
+  btnRedo.disabled = redoStack.length === 0;
+}
+
+/* =========================================================
+   8. 初始化画布
+   ========================================================= */
+function initCanvas(w, h, colorHex) {
+  while (undoStack.length) releaseRT(undoStack.pop());
+  while (redoStack.length) releaseRT(redoStack.pop());
+  while (rtPool.length) rtPool.pop().dispose();
+  if (rtMain) { rtMain.dispose(); rtMain = null; }
+  if (rtAlt)  { rtAlt.dispose();  rtAlt  = null; }
+
+  panW = w;
+  panH = h;
+
+  const bytesPerSnapshot = panW * panH * 4;
+  maxHist = Math.max(2, Math.min(30, Math.floor(BUDGET_BYTES / bytesPerSnapshot)));
+
+  rtMain = createRT(panW, panH);
+  rtAlt  = createRT(panW, panH);
+
+  fillUniforms.uColor.value.set(colorHex);
+  fillRT(rtMain);
+
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  overlayTex.needsUpdate = true;
+
+  updateHistoryButtons();
+
+  yaw = 0; pitch = 0; fov = 75; targetFov = 75;
+  isFisheye = false; currentMode = 0; targetMode = 0;
+  projBtn.textContent = '透视投影';
+  updateCamera();
+}
+
+/* =========================================================
+   9. 烘焙
+   ========================================================= */
+function bakeOverlay() {
+  if (!rtMain || panW === 0) return;
+
+  bakeUniforms.tBase.value    = rtMain.texture;
+  bakeUniforms.tOverlay.value = overlayTex;
+  overlayTex.needsUpdate = true;
+
+  bakeUniforms.uCamInv.value.copy(camera.matrixWorld).invert();
+  bakeUniforms.uAspect.value = window.innerWidth / window.innerHeight;
+  bakeUniforms.uFov.value    = THREE.MathUtils.degToRad(fov);
+  bakeUniforms.uMode.value   = currentMode > 0.5 ? 1.0 : 0.0;
+
+  fsQuad.material = bakeMat;
+  renderer.setRenderTarget(rtAlt);
+  renderer.render(fsScene, fsCam);
+  renderer.setRenderTarget(null);
+
+  const tmp = rtMain;
+  rtMain = rtAlt;
+  rtAlt  = tmp;
+
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  overlayTex.needsUpdate = true;
+}
+
+/* =========================================================
+   10. 导出等距柱状全景图
+   ========================================================= */
+const exportToast = document.getElementById('exportToast');
+
+function showToast(msg, ms = 1500) {
+  exportToast.textContent = msg;
+  exportToast.classList.add('on');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => exportToast.classList.remove('on'), ms);
+}
+
+function exportPanorama() {
+  if (!rtMain || panW === 0) {
+    showToast('还没有可导出的画面');
+    return;
+  }
+
+  showToast('正在导出全景图…', 900);
+
+  const w = panW, h = panH;
+  const pixels = new Uint8Array(w * h * 4);
+
+  const prevTarget = renderer.getRenderTarget();
+  renderer.setRenderTarget(rtMain);
+  renderer.readRenderTargetPixels(rtMain, 0, 0, w, h, pixels);
+  renderer.setRenderTarget(prevTarget);
+
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const cx = cv.getContext('2d');
+  const imgData = cx.createImageData(w, h);
+
+  const rowBytes = w * 4;
+  for (let y = 0; y < h; y++) {
+    const srcOff = (h - 1 - y) * rowBytes;
+    const dstOff = y * rowBytes;
+    imgData.data.set(pixels.subarray(srcOff, srcOff + rowBytes), dstOff);
+  }
+  cx.putImageData(imgData, 0, 0);
+
+  const link = document.createElement('a');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  link.download = `全景图_${w}x${h}_${ts}.png`;
+  link.href = cv.toDataURL('image/png');
+  link.click();
+
+  cv.width = cv.height = 0;
+
+  showToast('已导出 ' + w + ' × ' + h + ' 全景图', 2200);
+}
+
+/* =========================================================
+   11. 绘画逻辑
+   ========================================================= */
+const colorInput = document.getElementById('color');
+const alphaInput = document.getElementById('alpha');
+const sizeInput  = document.getElementById('size');
+const stabInput  = document.getElementById('stab');
+const btnUndo    = document.getElementById('btnUndo');
+const btnRedo    = document.getElementById('btnRedo');
+const btnGrid    = document.getElementById('btnGrid');
+const btnPen     = document.getElementById('btnPen');
+const btnWillow  = document.getElementById('btnWillow');
+const lockBtn    = document.getElementById('lockBtn');
+const projBtn    = document.getElementById('projBtn');
+const hintEl     = document.getElementById('hint');
+
+let tool = 'pen';
+let drawing = false;
+let strokePointerId = null;
+
+let rawX = 0, rawY = 0;
+let smX = 0, smY = 0;
+let lastPX = 0, lastPY = 0;
+let willowPts = [];
+
+let isLocked = false;
+
+function bindVal(input, span, fixed) {
+  const upd = () => span.textContent = fixed ? (+input.value).toFixed(fixed) : input.value;
+  input.addEventListener('input', upd);
+  upd();
+}
+bindVal(alphaInput, document.getElementById('alphaVal'), 2);
+bindVal(sizeInput,  document.getElementById('sizeVal'));
+bindVal(stabInput,  document.getElementById('stabVal'));
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function strokeColor() {
+  const [r, g, b] = hexToRgb(colorInput.value);
+  return `rgba(${r},${g},${b},${alphaInput.value})`;
+}
+
+function smoothFactor() {
+  return 1 - (+stabInput.value / 100) * 0.85;
+}
+
+function drawSegment(x0, y0, x1, y1) {
+  octx.strokeStyle = strokeColor();
+  octx.lineWidth   = +sizeInput.value;
+  octx.beginPath();
+  octx.moveTo(x0, y0);
+  octx.lineTo(x1, y1);
+  octx.stroke();
+}
+
+function drawDot(x, y) {
+  octx.fillStyle = strokeColor();
+  octx.beginPath();
+  octx.arc(x, y, Math.max(0.6, (+sizeInput.value) * 0.5), 0, Math.PI * 2);
+  octx.fill();
+}
+
+function drawWillowPreview() {
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  if (willowPts.length < 2) return;
+
+  octx.beginPath();
+  octx.moveTo(willowPts[0].x, willowPts[0].y);
+  for (let i = 1; i < willowPts.length; i++) octx.lineTo(willowPts[i].x, willowPts[i].y);
+  octx.closePath();
+
+  octx.fillStyle = strokeColor();
+  octx.fill();
+
+  octx.strokeStyle = 'rgba(0,0,0,0.45)';
+  octx.lineWidth = 1;
+  octx.setLineDash([6, 4]);
+  octx.stroke();
+  octx.setLineDash([]);
+}
+
+function commitWillow() {
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  if (willowPts.length < 3) return;
+
+  octx.beginPath();
+  octx.moveTo(willowPts[0].x, willowPts[0].y);
+  for (let i = 1; i < willowPts.length; i++) octx.lineTo(willowPts[i].x, willowPts[i].y);
+  octx.closePath();
+  octx.fillStyle = strokeColor();
+  octx.fill();
+}
+
+function processPoint(px, py) {
+  rawX = px;
+  rawY = py;
+
+  const k = smoothFactor();
+  smX += (rawX - smX) * k;
+  smY += (rawY - smY) * k;
+
+  if (tool === 'willow') {
+    const last = willowPts[willowPts.length - 1];
+    if (!last || Math.hypot(smX - last.x, smY - last.y) > 1.4) {
+      willowPts.push({ x: smX, y: smY });
+      drawWillowPreview();
+    }
+    return;
+  }
+
+  const dx = smX - lastPX, dy = smY - lastPY;
+  if (dx * dx + dy * dy < 0.05) return;
+
+  drawSegment(lastPX, lastPY, smX, smY);
+  lastPX = smX;
+  lastPY = smY;
+}
+
+function beginStroke(x, y, pointerId) {
+  pushUndo();
+
+  drawing = true;
+  strokePointerId = pointerId;
+
+  rawX = smX = lastPX = x;
+  rawY = smY = lastPY = y;
+
+  if (tool === 'willow') {
+    willowPts = [{ x, y }];
+  } else {
+    drawDot(x, y);
+  }
+}
+
+function endStroke() {
+  if (!drawing) return;
+  drawing = false;
+  strokePointerId = null;
+
+  const k = smoothFactor();
+  let guard = 0;
+  while (Math.hypot(rawX - smX, rawY - smY) > 0.6 && guard++ < 80) {
+    smX += (rawX - smX) * k;
+    smY += (rawY - smY) * k;
+    if (tool === 'willow') {
+      willowPts.push({ x: smX, y: smY });
+    } else {
+      drawSegment(lastPX, lastPY, smX, smY);
+      lastPX = smX;
+      lastPY = smY;
+    }
+  }
+
+  if (tool === 'willow') {
+    commitWillow();
+    willowPts = [];
+  }
+
+  bakeOverlay();
+}
+
+/* =========================================================
+   12. 输入
+   ========================================================= */
+const pointers = new Map();
+let isDragging = false;
+let dLastX = 0, dLastY = 0;
+let pinchDist = 0, pinchFov = 75, pinchActive = false;
+
+function getFovLimits() {
+  return isFisheye
+    ? { min: FISHEYE_FOV_MIN, max: FISHEYE_FOV_MAX }
+    : { min: PERSP_FOV_MIN,  max: PERSP_FOV_MAX  };
+}
+
+function rotateCam(dx, dy) {
+  const s = BASE_SENSITIVITY * (fov / BASE_FOV);
+  const dYaw   = dx * s;
+  const dPitch = dy * s;
+
+  yaw += dYaw;
+  pitch = clampPitch(pitch + dPitch);
+
+  velYaw = dYaw;
+  velPitch = dPitch;
+  lastRotateInputTime = performance.now();
+
+  updateCamera();
+}
+
+glEl.addEventListener('pointerdown', e => {
+  if (!rtMain) return;
+  e.preventDefault();
+  try { glEl.setPointerCapture(e.pointerId); } catch (err) {}
+
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (isLocked) {
+    if (!drawing) beginStroke(e.clientX, e.clientY, e.pointerId);
+    return;
+  }
+
+  glEl.classList.add('grabbing');
+
+  if (pointers.size === 1) {
+    isDragging = true;
+    dLastX = e.clientX; dLastY = e.clientY;
+    velYaw = 0; velPitch = 0;
+    lastRotateInputTime = performance.now();
+  } else if (pointers.size === 2) {
+    isDragging = false;
+    const [a, b] = [...pointers.values()];
+    pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+    pinchFov = targetFov;
+    pinchActive = true;
+  }
+}, { passive: false });
+
+glEl.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  e.preventDefault();
+
+  if (isLocked) {
+    if (drawing && e.pointerId === strokePointerId) {
+      const coalesced = (typeof e.getCoalescedEvents === 'function') ? e.getCoalescedEvents() : null;
+      if (coalesced && coalesced.length) {
+        for (const ev of coalesced) processPoint(ev.clientX, ev.clientY);
+      } else {
+        processPoint(e.clientX, e.clientY);
+      }
+    }
+    return;
+  }
+
+  if (pinchActive && pointers.size >= 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchDist > 0 && d > 0) {
+      const limits = getFovLimits();
+      targetFov = Math.max(limits.min, Math.min(limits.max, pinchFov * pinchDist / d));
+    }
+    return;
+  }
+
+  if (isDragging) {
+    const dx = e.clientX - dLastX;
+    const dy = e.clientY - dLastY;
+    dLastX = e.clientX; dLastY = e.clientY;
+    rotateCam(dx, dy);
+  }
+}, { passive: false });
+
+function onPointerUp(e) {
+  pointers.delete(e.pointerId);
+
+  if (isLocked) {
+    if (drawing && e.pointerId === strokePointerId) endStroke();
+    return;
+  }
+
+  if (pointers.size < 2) pinchActive = false;
+  if (pointers.size === 0) {
+    isDragging = false;
+    glEl.classList.remove('grabbing');
+  }
+}
+glEl.addEventListener('pointerup', onPointerUp);
+glEl.addEventListener('pointercancel', onPointerUp);
+
+glEl.addEventListener('wheel', e => {
+  if (!rtMain) return;
+  e.preventDefault();
+  if (isLocked) return;
+  const step = 0.06 * (fov / BASE_FOV);
+  const limits = getFovLimits();
+  targetFov = Math.max(limits.min, Math.min(limits.max, targetFov + e.deltaY * step));
+}, { passive: false });
+
+/* =========================================================
+   13. UI 事件
+   ========================================================= */
+function setTool(t) {
+  tool = t;
+  btnPen.classList.toggle('active', t === 'pen');
+  btnWillow.classList.toggle('active', t === 'willow');
+  willowPts = [];
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+}
+btnPen.addEventListener('click', () => setTool('pen'));
+btnWillow.addEventListener('click', () => setTool('willow'));
+
+btnUndo.addEventListener('click', undo);
+btnRedo.addEventListener('click', redo);
+
+btnGrid.addEventListener('click', () => {
+  const on = btnGrid.classList.toggle('active');
+  uniforms.uShowGrid.value = on ? 1 : 0;
+});
+
+document.getElementById('btnClear').addEventListener('click', () => {
+  if (!rtMain) return;
+  pushUndo();
+  octx.clearRect(0, 0, overlay.width, overlay.height);
+  overlayTex.needsUpdate = true;
+  fillRT(rtMain);
+});
+
+document.getElementById('btnSave').addEventListener('click', exportPanorama);
+
+/* ---- 顶部提示条 ---- */
+let hintTimer = 0;
+function showHint(text, ms = 2500) {
+  hintEl.textContent = text;
+  hintEl.classList.remove('hide');
+  clearTimeout(hintTimer);
+  if (ms > 0) hintTimer = setTimeout(() => hintEl.classList.add('hide'), ms);
+}
+function hideHint() {
+  clearTimeout(hintTimer);
+  hintEl.classList.add('hide');
+}
+
+/* ---- 首次新建后的简短教程 ---- */
+const tutorialEl   = document.getElementById('tutorial');
+const tutorialOk   = document.getElementById('tutorialOk');
+let tutorialShown  = false;
+let tutorialTimer  = 0;
+
+function showTutorial(ms = 7000) {
+  tutorialEl.classList.add('on');
+  clearTimeout(tutorialTimer);
+  if (ms > 0) tutorialTimer = setTimeout(hideTutorial, ms);
+}
+function hideTutorial() {
+  clearTimeout(tutorialTimer);
+  tutorialEl.classList.remove('on');
+}
+tutorialOk.addEventListener('click', hideTutorial);
+
+/* ---- 固定视角 ---- */
+function setLocked(v) {
+  isLocked = v;
+  glEl.classList.toggle('locked', v);
+
+  if (v) {
+    velYaw = 0; velPitch = 0;
+    isDragging = false;
+    glEl.classList.remove('grabbing');
+    targetFov = fov;
+    currentMode = targetMode;
+
+    lockBtn.classList.add('locked');
+    lockBtn.textContent = '绘画中';
+    document.getElementById('lockFrame').classList.add('on');
+    projBtn.disabled = true;
+
+    showHint('已固定视角，可以开始绘画了', 2500);
+  } else {
+    if (drawing) endStroke();
+    lockBtn.classList.remove('locked');
+    lockBtn.textContent = '固定视角';
+    document.getElementById('lockFrame').classList.remove('on');
+    projBtn.disabled = false;
+
+    showHint('固定视角后即可绘画', 2500);
+  }
+}
+lockBtn.addEventListener('click', () => setLocked(!isLocked));
+
+/* ---- 投影切换 ---- */
+function toggleProjection() {
+  if (isLocked) return;
+  isFisheye = !isFisheye;
+  targetMode = isFisheye ? 1.0 : 0.0;
+  projBtn.textContent = isFisheye ? '鱼眼投影' : '透视投影';
+
+  const limits = getFovLimits();
+  if (targetFov > limits.max) targetFov = limits.max;
+  if (targetFov < limits.min) targetFov = limits.min;
+}
+projBtn.addEventListener('click', toggleProjection);
+
+/* ---- 快捷键 ---- */
+window.addEventListener('keydown', e => {
+  if (!(e.ctrlKey || e.metaKey)) {
+    if (e.key === 'l' || e.key === 'L') setLocked(!isLocked);
+    if (e.key === 'g' || e.key === 'G') btnGrid.click();
+    if (e.key === 's' || e.key === 'S') { e.preventDefault(); exportPanorama(); }
+    return;
+  }
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+  else if (k === 's') { e.preventDefault(); exportPanorama(); }
+});
+
+/* =========================================================
+   14. 尺寸变化
+   ========================================================= */
+window.addEventListener('resize', () => {
+  const aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = aspect;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  uniforms.uAspect.value = aspect;
+  resizeOverlay();
+});
+
+/* =========================================================
+   15. 渲染循环
+   ========================================================= */
+function animate() {
+  requestAnimationFrame(animate);
+
+  const modeDiff = targetMode - currentMode;
+  if (Math.abs(modeDiff) > 0.001) currentMode += modeDiff * MODE_SMOOTH;
+  else currentMode = targetMode;
+  uniforms.uMode.value = currentMode;
+
+  const fovDiff = targetFov - fov;
+  if (Math.abs(fovDiff) > 0.01) fov += fovDiff * ZOOM_SMOOTH;
+  else fov = targetFov;
+
+  uniforms.uFov.value = THREE.MathUtils.degToRad(fov);
+  uniforms.uPixelAngle.value = fov / Math.max(1, renderer.domElement.clientHeight);
+
+  if (!isDragging && pointers.size === 0) {
+    if (Math.abs(velYaw) > MIN_VELOCITY || Math.abs(velPitch) > MIN_VELOCITY) {
+      yaw += velYaw;
+      pitch = clampPitch(pitch + velPitch);
+      velYaw *= INERTIA_DAMPING;
+      velPitch *= INERTIA_DAMPING;
+      updateCamera();
+    } else {
+      velYaw = 0;
+      velPitch = 0;
+    }
+  }
+
+  camera.updateMatrixWorld();
+  uniforms.uCamMat.value.copy(camera.matrixWorld);
+
+  if (rtMain) uniforms.tEnv.value = rtMain.texture;
+
+  renderer.setRenderTarget(null);
+  renderer.render(scene, camera);
+}
+
+/* =========================================================
+   16. 开始界面 / 创建面板逻辑
+   ========================================================= */
+const startScreen  = document.getElementById('startScreen');
+const createPanel  = document.getElementById('createPanel');
+const createBtn    = document.getElementById('createBtn');
+const cancelBtn    = document.getElementById('cancelCreate');
+const confirmBtn   = document.getElementById('confirmCreate');
+const resInfo      = document.getElementById('resInfo');
+const bgColorInput = document.getElementById('bgColor');
+const sidebarEl    = document.querySelector('.sidebar');
+const bottomBarEl  = document.getElementById('bottom-bar');
+
+let selW = 2048;
+let selH = 1024;
+
+const resBtns = document.querySelectorAll('.res-options button');
+resBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    resBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selW = +btn.dataset.w;
+    selH = +btn.dataset.h;
+    resInfo.textContent = `${selW} × ${selH}  (2:1)`;
+  });
+});
+
+document.querySelectorAll('.bg-presets button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    bgColorInput.value = btn.dataset.color;
+  });
+});
+
+createBtn.addEventListener('click', () => {
+  createPanel.classList.add('on');
+});
+
+cancelBtn.addEventListener('click', () => {
+  createPanel.classList.remove('on');
+});
+
+createPanel.addEventListener('click', e => {
+  if (e.target === createPanel) createPanel.classList.remove('on');
+});
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && createPanel.classList.contains('on')) {
+    createPanel.classList.remove('on');
+  }
+});
+
+confirmBtn.addEventListener('click', () => {
+  const maxTex = renderer.capabilities.maxTextureSize;
+
+  let w = selW, h = selH;
+  if (w > maxTex || h > maxTex) {
+    const s = maxTex / Math.max(w, h);
+    w = Math.floor(w * s / 2) * 2;
+    h = Math.floor(h * s / 2) * 2;
+    showToast(`设备上限 ${maxTex}px，已降为 ${w} × ${h}`, 2800);
+  }
+
+  const colorHex = bgColorInput.value;
+
+  createPanel.classList.remove('on');
+  startScreen.classList.add('hidden');
+  setTimeout(() => {
+    if (startScreen.parentNode) startScreen.style.display = 'none';
+  }, 500);
+
+  sidebarEl.classList.remove('hidden');
+  bottomBarEl.classList.remove('hidden');
+
+  initCanvas(w, h, colorHex);
+
+  /* 首次新建画布后显示简短教程，之后只显示顶部短提示 */
+  if (!tutorialShown) {
+    tutorialShown = true;
+    showTutorial(7000);
+  } else {
+    showHint('拖动旋转视角 滚轮缩放，或者双指放大。固定视角后即可绘画', 6000);
+  }
+});
+
+/* 首次交互收起顶部提示 */
+glEl.addEventListener('pointerdown', hideHint, { once: true });
+
+/* =========================================================
+   17. 启动
+   ========================================================= */
+animate();
+</script>
+</body>
+</html>
